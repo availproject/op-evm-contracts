@@ -1,17 +1,17 @@
 
 
 clean:
-	rm -rf ./build
+	rm -rf ./pkg/staking
 	npx hardhat clean
 
 compile:
 	npx hardhat compile
 
 build-go:
-	mkdir ./build
-	solc --abi contracts/Staking.sol -o build/ --overwrite
-	solc --bin contracts/Staking.sol -o build/ --overwrite
-	abigen --bin=./build/Staking.bin --abi=./build/Staking.abi --pkg=staking --out=./build/Staking.go
+	mkdir -p ./pkg/staking
+	solc --abi contracts/Staking.sol -o ./pkg/staking/ --overwrite
+	solc --bin contracts/Staking.sol -o ./pkg/staking/ --overwrite
+	abigen --bin=./build/Staking.bin --abi=./pkg/staking/Staking.abi --pkg=staking --out=./pkg/staking/Staking.go
 
 build: clean compile build-go
 
