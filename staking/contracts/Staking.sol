@@ -48,6 +48,15 @@ contract Staking {
     mapping(address => bool) public _addressToIsWatchtower;
     mapping(address => uint256) public _addressToWatchtowerIndex;
 
+    address[] public _dispute_watchtowers;
+    mapping(address => bool) public _addressToIsDisputedWatchtower;
+    mapping(address => uint256) public _addressToDisputedWatchtowerIndex;
+    mapping(address => uint256) public _addressToSequencerToDisputedWatchtower;
+    mapping(address => address) public _addressDisputedWatchtowerToSequencer;
+    mapping(address => bool) public _addressDisputedWatchtowerToSequencerExists;
+    mapping(address => address) public _addressDisputedSequencerToWatchtower;
+    mapping(address => bool) public _addressDisputedSequencerToWatchtowerExists;
+    
     address[] public _validators;
     mapping(address => bool) public _addressToIsValidator;
     mapping(address => uint256) public _addressToValidatorIndex;
@@ -55,7 +64,7 @@ contract Staking {
     // Events
     event Staked(address indexed account, uint256 amount);
     event Unstaked(address indexed account, uint256 amount);
-    event Slashed(address indexed account, uint256 newAmount, uint256 slashedAmount);
+    event Slashed(address indexed account, uint256 newAmount, uint256 slashedAmount, address indexed feeRecipientAddr);
 
     // Fraud Dispute Resolution Events
     event DisputeResolutionBegan(address indexed account);
@@ -71,6 +80,23 @@ contract Staking {
         require(
             _addressToStakedAmount[msg.sender] > 0,
             "Only staker can call function"
+        );
+        _;
+    }
+
+
+    modifier onlyWatchtower() {
+        require(
+            _isWatchtower(msg.sender) == true,
+            "Only watchtower can call function"
+        );
+        _;
+    }
+
+    modifier onlySequencer() {
+        require(
+            _isSequencer(msg.sender) == true,
+            "Only sequencer can call function"
         );
         _;
     }
@@ -184,6 +210,18 @@ contract Staking {
         return _validators;
     }
 
+    function GetCurrentDisputeWatchtowers() public view returns (address[] memory) {
+        return _dispute_watchtowers;
+    }
+
+    function GetDisputedSequencerAddrs(address watchtowerAddr) public view returns (address) {
+        return _addressDisputedWatchtowerToSequencer[watchtowerAddr];
+    }
+
+    function GetDisputedWatchtowerAddr(address sequencerAddr) public view returns (address) {
+        return _addressDisputedSequencerToWatchtower[sequencerAddr];
+    }
+
     function GetCurrentStakedAmount() public view returns (uint256) {
         return _stakedAmount;
     }
@@ -221,8 +259,11 @@ contract Staking {
         return _isSequencerInProbation(sequencerAddr);
     }
 
+    // onlyWatchtower
     function BeginDisputeResolution(address sequencerAddr) public {
         _appendToSequencersInProbationSet(sequencerAddr);
+        _appendToDisputeWatchtowersSet(msg.sender);
+        _appendToDisputedAddressesSet(msg.sender, sequencerAddr);
         emit DisputeResolutionBegan(sequencerAddr);
     }
 
@@ -251,9 +292,9 @@ contract Staking {
         _unstake();
     }
 
-    // TODO: Cannot be only staker but only watchtower for example
-    function slash(address slashAddr, uint256 slashAmount) public onlyEOA onlyStaker {
-        _slash(slashAddr, slashAmount);
+    // TODO: onlySequencer 
+    function slash(address slashAddr) public onlyEOA onlyStaker {
+        _slash(slashAddr);
     }
 
     // -- END PUBLIC STAKING FUNCTIONS
@@ -339,26 +380,25 @@ contract Staking {
     // TODO:
     // - Make sure slashing amount is properly transferred to appropriate participants
     // - Append slashed with time interval into the mapping so next sequencer set won't include it.
-    //
-    function _slash(address slashAddr, uint256 slashAmount) private {
+    // - onlySequencer (can do the slashing)
+    function _slash(address slashAddr) private {
         uint256 amount = _addressToStakedAmount[msg.sender];
+        uint256 slashAmount = _calculateSlashFeeForAddress(amount, _getSlashPercentage() * 100);
 
-        require(
-            slashAmount != 0,
-            "Slash amount needs to be provided."
-        );
+        address feeRecipientAddr;
 
-        require(
-            slashAmount < amount,
-            "Slash amount cannot be greater than staked amount"
-        );
+        if (_addressDisputedSequencerToWatchtowerExists[slashAddr] == true) {
+            feeRecipientAddr = _addressDisputedWatchtowerToSequencer[slashAddr];
+        } else if (_addressDisputedSequencerToWatchtowerExists[slashAddr] == true) {
+            feeRecipientAddr = _addressDisputedSequencerToWatchtower[slashAddr];
+        }
 
         uint256 newStakedAmount = amount - slashAmount;
         _addressToStakedAmount[msg.sender] = newStakedAmount;
-        _stakedAmount -= newStakedAmount;
+        _stakedAmount -= slashAmount;
 
-        payable(msg.sender).transfer(slashAmount);
-        emit Slashed(msg.sender, newStakedAmount, slashAmount);
+        payable(feeRecipientAddr).transfer(slashAmount);
+        emit Slashed(msg.sender, newStakedAmount, slashAmount, feeRecipientAddr);
 
         if(_isSequencerInProbation(slashAddr)) {
             _deleteFromSequencersInProbationSet(slashAddr);
@@ -466,6 +506,13 @@ contract Staking {
         _sequencers_in_probation.push(newMaliciousAddr);
     }
 
+    function _appendToDisputeWatchtowersSet(address newWatchtower) private {
+        _addressToIsDisputedWatchtower[newWatchtower] = true;
+        _addressToDisputedWatchtowerIndex[newWatchtower] = _dispute_watchtowers.length;
+        _dispute_watchtowers.push(newWatchtower);
+    }
+
+
     function _deleteFromSequencersInProbationSet(address participant) private {
         require(
             _isSequencerInProbation(participant),
@@ -493,6 +540,33 @@ contract Staking {
         _sequencers_in_probation.pop();
     }
 
+    function _deleteFromDisputeWatchtowerSet(address watchtowerAddr) private {
+        require(
+            _isDisputedWatchtower(watchtowerAddr),
+            "Address has to be in disputed watchtowers in order to delete it from the list."
+        );
+
+        require(
+            _addressToDisputedWatchtowerIndex[watchtowerAddr] < _dispute_watchtowers.length,
+            "Disputed watchtower address index out of range in mapping"
+        );
+
+        // index of removed address
+        uint256 index = _addressToDisputedWatchtowerIndex[watchtowerAddr];
+        uint256 lastIndex = _dispute_watchtowers.length - 1;
+
+        if (index != lastIndex) {
+            // exchange between the element and last to pop for delete
+            address lastAddr = _dispute_watchtowers[lastIndex];
+            _dispute_watchtowers[index] = lastAddr;
+            _addressToDisputedWatchtowerIndex[lastAddr] = index;
+        }
+
+        _addressToIsDisputedWatchtower[watchtowerAddr] = false;
+        _addressToDisputedWatchtowerIndex[watchtowerAddr] = 0;
+        _dispute_watchtowers.pop();
+    }
+
     // Append to participant set only if participant is not already set.
     // Due to possibility to be multi-node participant, we need to make this check.
     function _appendToParticipantSet(address newParticipant) private {
@@ -509,10 +583,18 @@ contract Staking {
         _sequencers.push(newSequencer);
     }
 
+
     function _appendToWatchtowerSet(address newWatchtower) private {
         _addressToIsWatchtower[newWatchtower] = true;
         _addressToWatchtowerIndex[newWatchtower] = _watchtowers.length;
         _watchtowers.push(newWatchtower);
+    }
+
+    function _appendToDisputedAddressesSet(address watchtowerAddr, address sequencerAddr) private {
+        _addressDisputedWatchtowerToSequencer[watchtowerAddr] = sequencerAddr;
+        _addressDisputedWatchtowerToSequencerExists[watchtowerAddr] = true;
+        _addressDisputedSequencerToWatchtower[sequencerAddr] = watchtowerAddr;
+        _addressDisputedSequencerToWatchtowerExists[sequencerAddr] = true;
     }
 
     function _appendToValidatorSet(address newValidator) private {
@@ -539,6 +621,10 @@ contract Staking {
 
     function _isValidator(address account) private view returns (bool) {
         return _addressToIsValidator[account];
+    }
+
+    function _isDisputedWatchtower(address account) private view returns (bool) {
+        return _addressToIsDisputedWatchtower[account];
     }
 
     // Check if it is already sequencer as participant cannot become twice sequencer
@@ -610,6 +696,11 @@ contract Staking {
         } else {
             return _slashPercentage;
         }
+    }
+
+    function _calculateSlashFeeForAddress(uint256 amount, uint256 basePoints) private pure returns (uint256) {
+        require((amount * basePoints) >= 10_000, "Amount is too low to calculate fee");
+        return amount * basePoints / 10_000;
     }
 
     // -- END PRIVATE FUNCTIONS
