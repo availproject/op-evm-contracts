@@ -293,7 +293,7 @@ contract Staking {
     }
 
     // TODO: onlySequencer 
-    function slash(address slashAddr) public onlyEOA onlyStaker {
+    function slash(address slashAddr) public onlyEOA onlyStaker onlySequencer {
         _slash(slashAddr);
     }
 
