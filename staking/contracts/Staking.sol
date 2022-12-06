@@ -258,9 +258,8 @@ contract Staking {
     function GetIsSequencerInProbation(address sequencerAddr) public view returns (bool) {
         return _isSequencerInProbation(sequencerAddr);
     }
-
-    // onlyWatchtower
-    function BeginDisputeResolution(address sequencerAddr) public {
+    
+    function BeginDisputeResolution(address sequencerAddr) public onlyWatchtower {
         _appendToSequencersInProbationSet(sequencerAddr);
         _appendToDisputeWatchtowersSet(msg.sender);
         _appendToDisputedAddressesSet(msg.sender, sequencerAddr);
@@ -382,23 +381,23 @@ contract Staking {
     // - Append slashed with time interval into the mapping so next sequencer set won't include it.
     // - onlySequencer (can do the slashing)
     function _slash(address slashAddr) private {
-        uint256 amount = _addressToStakedAmount[msg.sender];
-        uint256 slashAmount = _calculateSlashFeeForAddress(amount, _getSlashPercentage() * 100);
-
         address feeRecipientAddr;
 
         if (_addressDisputedSequencerToWatchtowerExists[slashAddr] == true) {
-            feeRecipientAddr = _addressDisputedWatchtowerToSequencer[slashAddr];
-        } else if (_addressDisputedSequencerToWatchtowerExists[slashAddr] == true) {
             feeRecipientAddr = _addressDisputedSequencerToWatchtower[slashAddr];
+        } else if (_addressDisputedWatchtowerToSequencerExists[slashAddr] == true) {
+            feeRecipientAddr = _addressDisputedWatchtowerToSequencer[slashAddr];
         }
 
-        uint256 newStakedAmount = amount - slashAmount;
-        _addressToStakedAmount[msg.sender] = newStakedAmount;
+        uint256 amount = _addressToStakedAmount[slashAddr];
+        uint256 slashAmount = _calculateSlashFeeForAddress(amount, _getSlashPercentage() * 100);
+
+        uint256 newSlashedAccountAmount = amount - slashAmount;
+        _addressToStakedAmount[slashAddr] = newSlashedAccountAmount;
         _stakedAmount -= slashAmount;
 
         payable(feeRecipientAddr).transfer(slashAmount);
-        emit Slashed(msg.sender, newStakedAmount, slashAmount, feeRecipientAddr);
+        emit Slashed(msg.sender, _stakedAmount, slashAmount, feeRecipientAddr);
 
         if(_isSequencerInProbation(slashAddr)) {
             _deleteFromSequencersInProbationSet(slashAddr);
