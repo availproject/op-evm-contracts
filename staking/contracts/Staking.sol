@@ -11,9 +11,8 @@ contract Staking {
     uint256 public constant DEFAULT_MIN_SLASH_PERCENTAGE = 1;
     string public  constant NODE_SEQUENCER = "sequencer";
     string public  constant NODE_WATCHTOWER = "watchtower";
-    string public  constant NODE_VALIDATOR = "validator";
 
-    string[] public AVAILABLE_NODE_TYPES = ["sequencer", "watchtower", "validator"];
+    string[] public AVAILABLE_NODE_TYPES = ["sequencer", "watchtower"];
 
     // Properties
     uint256 public _minStakingThreshold;
@@ -29,10 +28,8 @@ contract Staking {
     uint256 public _minimumNumParticipants;
     uint256 public _maximumNumParticipants;
     uint256 public _minimumNumSequencers;
-    uint256 public _minimumNumValidators;
     uint256 public _minimumNumWatchtowers;
     uint256 public _maximumNumSequencers;
-    uint256 public _maximumNumValidators;
     uint256 public _maximumNumWatchtowers;
 
     // For now, we are going to have 3 separated array storages for each node type
@@ -56,10 +53,6 @@ contract Staking {
     mapping(address => bool) public _addressDisputedWatchtowerToSequencerExists;
     mapping(address => address) public _addressDisputedSequencerToWatchtower;
     mapping(address => bool) public _addressDisputedSequencerToWatchtowerExists;
-    
-    address[] public _validators;
-    mapping(address => bool) public _addressToIsValidator;
-    mapping(address => uint256) public _addressToValidatorIndex;
 
     // Events
     event Staked(address indexed account, uint256 amount);
@@ -132,16 +125,6 @@ contract Staking {
         return _maximumNumSequencers;
     }
 
-    function SetMinNumValidators(uint256 minimumNumValidators) public returns (uint256) {
-        _minimumNumValidators = minimumNumValidators;
-        return _minimumNumValidators;
-    }
-
-    function SetMaxNumValidators(uint256 maximumNumValidators) public returns (uint256) {
-        _maximumNumValidators = maximumNumValidators;
-        return _maximumNumValidators;
-    }
-
     function SetMinNumWatchtowers(uint256 minimumNumWatchtowers) public returns (uint256) {
         _minimumNumWatchtowers = minimumNumWatchtowers;
         return _minimumNumWatchtowers;
@@ -164,14 +147,6 @@ contract Staking {
 
     function GetMaxNumSequencers() public view returns (uint256) {
         return _maximumNumSequencers;
-    }
-
-    function GetMinNumValidators() public view returns (uint256) {
-        return _minimumNumValidators;
-    }
-
-    function GetMaxNumValidators() public view returns (uint256) {
-        return _maximumNumValidators;
     }
 
     function GetMinNumWatchtowers() public view returns (uint256) {
@@ -206,10 +181,6 @@ contract Staking {
         return _watchtowers;
     }
 
-    function GetCurrentValidators() public view returns (address[] memory) {
-        return _validators;
-    }
-
     function GetCurrentDisputeWatchtowers() public view returns (address[] memory) {
         return _dispute_watchtowers;
     }
@@ -238,10 +209,6 @@ contract Staking {
         return _addressToIsWatchtower[addr];
     }
 
-    function IsValidator(address addr) public view returns (bool) {
-        return _addressToIsValidator[addr];
-    }
-
     function GetCurrentStakingThreshold() public view returns (uint256) {
         return _getStakingThreshold();
     }
@@ -253,10 +220,6 @@ contract Staking {
 
     function GetCurrentSequencersInProbation() public view returns (address[] memory) {
         return _sequencers_in_probation;
-    }
-
-    function GetIsSequencerInProbation(address sequencerAddr) public view returns (bool) {
-        return _isSequencerInProbation(sequencerAddr);
     }
     
     function BeginDisputeResolution(address sequencerAddr) public onlyWatchtower {
@@ -302,7 +265,7 @@ contract Staking {
 
     function _stake(string memory nodeType) private {
         require(
-            _isNodeTypeArgumentSequencer(nodeType) || _isNodeTypeArgumentWatchtower(nodeType) || _isNodeTypeArgumentValidator(nodeType),
+            _isNodeTypeArgumentSequencer(nodeType) || _isNodeTypeArgumentWatchtower(nodeType),
             "Provided node type has to match available node types"
         );
 
@@ -321,11 +284,6 @@ contract Staking {
             "Sender is already watchtower. Rejecting stake request."
         );
 
-        require(
-            _canBecomeValidator(msg.sender, nodeType),
-            "Sender is already validator. Rejecting stake request."
-        );
-
         _stakedAmount += msg.value;
         _addressToStakedAmount[msg.sender] += msg.value;
 
@@ -336,8 +294,6 @@ contract Staking {
             _appendToSequencerSet(msg.sender);
         } else if (_isNodeTypeArgumentWatchtower(nodeType)) {
             _appendToWatchtowerSet(msg.sender);
-        } else if (_isNodeTypeArgumentValidator(nodeType)) {
-            _appendToValidatorSet(msg.sender);
         }
 
         emit Staked(msg.sender, msg.value);
@@ -365,11 +321,6 @@ contract Staking {
         // If possible, delete from the watchtower list
         if(_isWatchtower(msg.sender)) {
             _deleteFromWatchtowers(msg.sender);
-        }
-        
-        // If possible, delete from the validator list
-        if(_isValidator(msg.sender)) {
-            _deleteFromValidators(msg.sender);
         }
 
         payable(msg.sender).transfer(amount);
@@ -401,6 +352,13 @@ contract Staking {
 
         if(_isSequencerInProbation(slashAddr)) {
             _deleteFromSequencersInProbationSet(slashAddr);
+            _deleteFromDisputeWatchtowerSet(feeRecipientAddr);
+            emit DisputeResolutionEnded(slashAddr);
+        }
+
+        if(_isDisputedWatchtower(slashAddr)) {
+            _deleteFromSequencersInProbationSet(feeRecipientAddr);
+            _deleteFromDisputeWatchtowerSet(slashAddr);
             emit DisputeResolutionEnded(slashAddr);
         }
     }
@@ -475,28 +433,6 @@ contract Staking {
         _addressToIsWatchtower[staker] = false;
         _addressToWatchtowerIndex[staker] = 0;
         _watchtowers.pop();
-    }
-
-    function _deleteFromValidators(address staker) private {
-        require(
-            _addressToValidatorIndex[staker] < _validators.length,
-            "validator index out of range in mapping"
-        );
-
-        // index of removed address
-        uint256 index = _addressToValidatorIndex[staker];
-        uint256 lastIndex = _validators.length - 1;
-
-        if (index != lastIndex) {
-            // exchange between the element and last to pop for delete
-            address lastAddr = _validators[lastIndex];
-            _validators[index] = lastAddr;
-            _addressToValidatorIndex[lastAddr] = index;
-        }
-
-        _addressToIsValidator[staker] = false;
-        _addressToValidatorIndex[staker] = 0;
-        _validators.pop();
     }
 
     function _appendToSequencersInProbationSet(address newMaliciousAddr) private {
@@ -596,12 +532,6 @@ contract Staking {
         _addressDisputedSequencerToWatchtowerExists[sequencerAddr] = true;
     }
 
-    function _appendToValidatorSet(address newValidator) private {
-        _addressToIsValidator[newValidator] = true;
-        _addressToValidatorIndex[newValidator] = _validators.length;
-        _validators.push(newValidator);
-    }
-
     function _isSequencerInProbation(address account) private view returns (bool) {
         return _addressToIsSequencerInProbationAddr[account];
     }
@@ -616,10 +546,6 @@ contract Staking {
     
     function _isWatchtower(address account) private view returns (bool) {
         return _addressToIsWatchtower[account];
-    }
-
-    function _isValidator(address account) private view returns (bool) {
-        return _addressToIsValidator[account];
     }
 
     function _isDisputedWatchtower(address account) private view returns (bool) {
@@ -644,16 +570,6 @@ contract Staking {
         return true;
     }
 
-    // Check if it is already validator as participant cannot become twice validator
-    function _canBecomeValidator(address account, string memory nodeType) private view returns (bool)  {
-        if(_isNodeTypeArgumentValidator(nodeType) && _addressToIsValidator[account]) {
-           return false; 
-        }
-
-        return true;
-    }
-
-
     function _isNodeTypeArgumentSequencer(string memory _nodeType) private pure returns (bool) {
         // Compare string keccak256 hashes to check equality
         if (keccak256(abi.encodePacked(NODE_SEQUENCER)) == keccak256(abi.encodePacked(_nodeType))) {
@@ -666,15 +582,6 @@ contract Staking {
     function _isNodeTypeArgumentWatchtower(string memory _nodeType) private pure returns (bool) {
         // Compare string keccak256 hashes to check equality
         if (keccak256(abi.encodePacked(NODE_WATCHTOWER)) == keccak256(abi.encodePacked(_nodeType))) {
-            return true;
-        }
-
-        return false;
-    }
-
-    function _isNodeTypeArgumentValidator(string memory _nodeType) private pure returns (bool) {
-        // Compare string keccak256 hashes to check equality
-        if (keccak256(abi.encodePacked(NODE_VALIDATOR)) == keccak256(abi.encodePacked(_nodeType))) {
             return true;
         }
 
