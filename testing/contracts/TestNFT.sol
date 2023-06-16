@@ -16,7 +16,7 @@ contract TestNFT is ERC721 {
         return s_tokenCounter;
     }
 
-    function getTokenCounter() public returns(uint) {
+    function getTokenCounter() public view returns(uint) {
         return s_tokenCounter;
     }
 
