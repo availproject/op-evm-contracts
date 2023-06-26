@@ -1,4 +1,4 @@
-module github.com/maticnetwork/avail-settlement-contracts
+module github.com/availproject/op-evm-contracts
 
 go 1.19
 
