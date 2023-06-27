@@ -8,7 +8,7 @@ const config: HardhatUserConfig = {
   defaultNetwork: "availsl",
   networks: {
     availsl: {
-      url: process.env.AVAIL_SL_URL,
+      url: process.env.OP_EVM_URL,
       chainId: 100,
       gas: 21000,
       accounts: [`${process.env.ACC_PRIVATE_KEY}`]
